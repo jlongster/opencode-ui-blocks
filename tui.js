@@ -2,6 +2,9 @@
 // src/tui/plugin.ts
 import { onCleanup } from "solid-js";
 
+// src/tui/panel.ts
+import { BoxRenderable as BoxRenderable2, TextRenderable as TextRenderable2 } from "@opentui/core";
+
 // src/lua/value.ts
 class Journal {
   entries = [];
@@ -2579,26 +2582,7 @@ class LuaState {
   }
 }
 // src/fence.ts
-var MAX_WIDTH = 200;
 var MAX_HEIGHT = 60;
-function parseFence(info) {
-  const words = /^ui(?:\s+lua)?(?=\s|$)/.exec(info.trim());
-  if (!words)
-    return;
-  const settings = Object.fromEntries([...info.trim().slice(words[0].length).matchAll(/([a-zA-Z]+)=("([^"]*)"|'([^']*)'|(\S+))/g)].map((match) => [
-    match[1],
-    match[3] ?? match[4] ?? match[5]
-  ]));
-  const size = /size=\s*(auto|\d+)\s*[xX\u00D7]\s*(auto|\d+)/.exec(info);
-  return {
-    width: !size || size[1] === "auto" ? "auto" : clamp(Number(size[1]), 10, MAX_WIDTH),
-    height: !size || size[2] === "auto" ? "auto" : clamp(Number(size[2]), 1, MAX_HEIGHT),
-    title: settings.title || undefined
-  };
-}
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
 // src/stream.ts
 var MAX_BACKOFF = 12;
 function closePrefix(source, final = false) {
@@ -2793,7 +2777,7 @@ class Widget {
       const inc = num(step, 1, "slider", 4);
       if (inc <= 0)
         throw new LuaError("bad argument #4 to 'slider' (step must be positive)");
-      const current = clamp2(num(value, lo, "slider", 1), lo, hi);
+      const current = clamp(num(value, lo, "slider", 1), lo, hi);
       const opts = options instanceof LuaTable ? options : undefined;
       const id = build.id("slider", "", opts?.get("key"));
       const width = opts?.get("width");
@@ -2809,7 +2793,7 @@ class Widget {
       const raw = Number(event.args?.[0]);
       if (!Number.isFinite(raw))
         return current;
-      return clamp2(lo + Math.round((raw - lo) / inc) * inc, lo, hi);
+      return clamp(lo + Math.round((raw - lo) / inc) * inc, lo, hi);
     });
     define("progress", ([value, max, options]) => {
       const opts = options instanceof LuaTable ? options : undefined;
@@ -2839,8 +2823,8 @@ class Widget {
         t: "image",
         p: {
           src: src.trim(),
-          ...typeof width === "number" ? { width: clamp2(Math.round(width), 4, 200) } : {},
-          ...typeof height === "number" ? { height: clamp2(Math.round(height), 1, 60) } : {},
+          ...typeof width === "number" ? { width: clamp(Math.round(width), 4, 200) } : {},
+          ...typeof height === "number" ? { height: clamp(Math.round(height), 1, 60) } : {},
           ...typeof fit === "string" ? { fit } : {}
         },
         c: [],
@@ -2882,7 +2866,7 @@ class Widget {
     define("next_frame", ([fn, ms]) => {
       if (!(fn instanceof LuaFunction))
         throw new LuaError(`bad argument #1 to 'next_frame' (function expected, got ${fn === undefined ? "no value" : type(fn)})`);
-      const delay = clamp2(num(ms, 0, "next_frame", 2), 0, MAX_DELAY);
+      const delay = clamp(num(ms, 0, "next_frame", 2), 0, MAX_DELAY);
       if (this.queue.some((q) => q.fn === fn))
         return [];
       const now = this.now();
@@ -2961,7 +2945,7 @@ function num(v, fallback, name, n) {
     return v;
   throw new LuaError(`bad argument #${n} to '${name}' (number expected, got ${type(v)})`);
 }
-function clamp2(v, lo, hi) {
+function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
 }
 // src/tui/controller.ts
@@ -3073,16 +3057,39 @@ function controllerFor(key) {
     controllers.delete(controllers.keys().next().value);
   return created;
 }
-function promoteController(from, to) {
-  const streaming = controllers.get(from);
-  if (!streaming || controllers.has(to))
-    return;
-  controllers.delete(from);
-  controllers.set(to, streaming);
-}
 
-// src/tui/panel.ts
-import { BoxRenderable as BoxRenderable2, TextAttributes as TextAttributes2, TextRenderable as TextRenderable2 } from "@opentui/core";
+// src/tui/partial-json.ts
+function partialString(json, key) {
+  const match = new RegExp(`"${key}"\\s*:\\s*"`).exec(json);
+  if (!match)
+    return;
+  let out = "";
+  for (let i = match.index + match[0].length;i < json.length; i++) {
+    const c = json[i];
+    if (c === '"')
+      return out;
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const e = json[i + 1];
+    if (e === undefined)
+      return out;
+    if (e === "u") {
+      const hex = json.slice(i + 2, i + 6);
+      if (!/^[0-9a-fA-F]{4}$/.test(hex))
+        return out;
+      out += String.fromCharCode(parseInt(hex, 16));
+      i += 5;
+      continue;
+    }
+    out += ESCAPES[e] ?? e;
+    i++;
+  }
+  return out;
+}
+var ESCAPES = { n: `
+`, t: "\t", r: "\r", b: "\b", f: "\f", '"': '"', "\\": "\\", "/": "/" };
 
 // src/tui/renderable.ts
 import {
@@ -3511,154 +3518,117 @@ function colorOf(value, palette) {
 
 // src/tui/panel.ts
 var PANEL = "ui-blocks";
-var shown;
+var TOOL = "ui_app";
+var apps = new Map;
+var selected = new Map;
 var listeners = new Set;
+var notify = () => listeners.forEach((listener) => listener());
 var panelApps = {
-  get shown() {
-    return shown;
+  get(id) {
+    return apps.get(id);
   },
-  show(app) {
-    if (shown?.key === app.key && shown.frame === app.frame)
+  selected(sessionID) {
+    const id = selected.get(sessionID);
+    return id === undefined ? undefined : apps.get(id);
+  },
+  select(sessionID, id) {
+    if (selected.get(sessionID) === id)
       return;
-    shown = app;
-    listeners.forEach((listener) => listener());
+    selected.set(sessionID, id);
+    notify();
+  },
+  begin(sessionID, id) {
+    if (!apps.has(id))
+      apps.set(id, { id, sessionID, title: "App", input: "", done: false });
+    if (selected.get(sessionID) === id)
+      return notify();
+    this.select(sessionID, id);
+  },
+  delta(id, delta) {
+    const app = apps.get(id);
+    if (!app || app.done)
+      return;
+    app.input += delta;
+    sync(app);
+  },
+  finish(sessionID, id, input) {
+    const app = apps.get(id) ?? { id, sessionID, title: "App", input: "", done: false };
+    apps.set(id, app);
+    const parsed = typeof input === "string" ? parse2(input) : input;
+    if (!parsed)
+      return;
+    app.input = JSON.stringify(parsed);
+    app.done = true;
+    sync(app);
+    notify();
   },
   subscribe(listener) {
     listeners.add(listener);
     return () => listeners.delete(listener);
   }
 };
+function sync(app) {
+  const title = partialString(app.input, "title");
+  const changed = title !== undefined && title !== app.title;
+  if (title !== undefined)
+    app.title = title;
+  const lua = partialString(app.input, "lua");
+  if (lua === undefined)
+    return changed ? notify() : undefined;
+  const controller = controllerFor(app.id);
+  const first = controller.source === "" && lua !== "";
+  controller.update(lua, app.done);
+  if (changed || first)
+    notify();
+}
+function parse2(text) {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === "object" ? value : undefined;
+  } catch {
+    return;
+  }
+}
 
 class PanelAppRenderable extends BoxRenderable2 {
+  sessionID;
   palette;
   directory;
   unsubscribe;
   current = null;
-  constructor(ctx, palette, directory) {
+  constructor(ctx, sessionID, palette, directory) {
     super(ctx, { width: "100%", height: "100%", flexDirection: "column", padding: 1 });
+    this.sessionID = sessionID;
     this.palette = palette;
     this.directory = directory;
     this.unsubscribe = panelApps.subscribe(() => this.update());
     this.update();
   }
   update() {
-    const app = panelApps.shown;
-    const key = app ? `${app.key}
-${app.frame.title ?? ""}` : undefined;
+    const app = panelApps.selected(this.sessionID);
+    const writing = app !== undefined && !app.done && partialString(app.input, "lua") === undefined;
+    const key = app ? `${app.id}
+${app.title}
+${writing}` : undefined;
     if (this.isDestroyed || key === this.current)
       return;
     this.current = key;
     this.getChildren().forEach((child) => child.destroyRecursively());
     if (!app) {
-      this.add(new TextRenderable2(this.ctx, { content: "No app yet. Ask for a ```ui lua widget.", fg: this.palette().muted }));
+      this.add(new TextRenderable2(this.ctx, { content: "No app in this session yet.", fg: this.palette().muted }));
       return;
     }
-    const frame = { ...app.frame, width: "auto", height: "auto" };
-    this.add(new UiBlockRenderable(this.ctx, controllerFor(app.key), frame, this.palette(), this.directory, { fill: true }));
+    if (writing) {
+      this.add(new TextRenderable2(this.ctx, { content: "Writing the app\u2026", fg: this.palette().muted }));
+      return;
+    }
+    const frame = { width: "auto", height: "auto", title: app.title };
+    this.add(new UiBlockRenderable(this.ctx, controllerFor(app.id), frame, this.palette(), this.directory, { fill: true }));
   }
   destroySelf() {
     this.unsubscribe();
     super.destroySelf();
   }
-}
-
-class AppCardRenderable extends BoxRenderable2 {
-  app;
-  streaming;
-  palette;
-  open;
-  unsubscribe;
-  status;
-  action;
-  shownText = "";
-  constructor(ctx, app, streaming, palette, open) {
-    super(ctx, {
-      border: true,
-      borderStyle: "rounded",
-      borderColor: palette.border,
-      title: ` ${app.frame.title ?? "App"} `,
-      flexDirection: "row",
-      gap: 2,
-      paddingLeft: 1,
-      paddingRight: 1,
-      marginTop: 1,
-      width: "100%"
-    });
-    this.app = app;
-    this.streaming = streaming;
-    this.palette = palette;
-    this.open = open;
-    this.status = new TextRenderable2(ctx, { content: "", fg: palette.muted, flexGrow: 1, flexShrink: 1 });
-    this.action = new TextRenderable2(ctx, { content: "", fg: palette.accent, attributes: TextAttributes2.BOLD, selectable: false, flexShrink: 0 });
-    this.action.onMouseDown = (event) => {
-      if (event.button !== 0)
-        return;
-      event.stopPropagation();
-      panelApps.show(this.app);
-      this.open();
-    };
-    this.add(this.status);
-    this.add(this.action);
-    this.unsubscribe = panelApps.subscribe(() => this.update());
-    this.update();
-  }
-  update() {
-    if (this.isDestroyed)
-      return;
-    const showing = panelApps.shown?.key === this.app.key;
-    const status = this.streaming ? "streaming into the side panel\u2026" : showing ? "running in the side panel" : "app";
-    const action = showing ? "[ Show panel ]" : "[ Open in panel ]";
-    if (this.shownText === status + action)
-      return;
-    this.shownText = status + action;
-    this.status.content = status;
-    this.action.content = action;
-  }
-  destroySelf() {
-    this.unsubscribe();
-    super.destroySelf();
-  }
-}
-
-// src/tui/block.ts
-function createUiBlockRenderer(renderer, palette, directory, panel) {
-  return (token) => {
-    const frame = parseFence(token.lang ?? "");
-    if (!frame)
-      return;
-    if (!token.raw.includes(`
-`))
-      return;
-    const closed = isClosed(token.raw);
-    const streamingKey = `streaming:${token.lang}`;
-    const key = closed ? `block:${Bun.hash(token.lang + `
-` + token.text)}` : streamingKey;
-    if (closed)
-      promoteController(streamingKey, key);
-    const controller = controllerFor(key);
-    controller.update(token.text, closed);
-    if (!panel)
-      return new UiBlockRenderable(renderer, controller, frame, palette(), directory);
-    const app = { key, frame };
-    if (!closed && panelApps.shown?.key !== key) {
-      panelApps.show(app);
-      panel.open({ keepFocus: true });
-    }
-    if (closed && panelApps.shown?.key === streamingKey)
-      panelApps.show(app);
-    return new AppCardRenderable(renderer, app, !closed, palette(), () => panel.open());
-  };
-}
-function isClosed(raw) {
-  const fence = /^ {0,3}(`{3,}|~{3,})/.exec(raw)?.[1];
-  if (!fence)
-    return false;
-  const lines = raw.trimEnd().split(`
-`);
-  if (lines.length < 2)
-    return false;
-  const last = lines[lines.length - 1].trim();
-  return last.length >= fence.length && last === fence[0].repeat(last.length);
 }
 
 // src/tui/plugin.ts
@@ -3673,25 +3643,39 @@ var plugin_default = {
       border: context.theme.border.base
     });
     const directory = () => context.location?.directory ?? process.cwd();
-    const inline = context.options.display === "inline";
-    let returnFocus = false;
-    const panel = inline ? undefined : {
-      open: (options) => {
-        if (context.ui.panel.current()?.name === PANEL)
-          return;
-        returnFocus = options?.keepFocus === true;
-        context.ui.panel.open(PANEL);
-      }
+    const viewing = () => {
+      const route = context.ui.router.current();
+      return route.type === "session" ? route.sessionID : undefined;
     };
-    context.markdown.registerCodeBlockRenderer("ui", createUiBlockRenderer(context.renderer, palette, directory, panel));
-    if (inline)
-      return;
+    let returnFocus = false;
+    const open = (options) => {
+      if (context.ui.panel.current()?.name === PANEL)
+        return;
+      returnFocus = options.keepFocus;
+      context.ui.panel.open(PANEL);
+    };
+    context.data.on("session.tool.input.started", (event) => {
+      if (event.data.name !== TOOL)
+        return;
+      panelApps.begin(event.data.sessionID, event.data.id);
+      if (viewing() === event.data.sessionID)
+        open({ keepFocus: true });
+    });
+    context.data.on("session.tool.input.delta", (event) => panelApps.delta(event.data.id, event.data.delta));
+    context.data.on("session.tool.input.ended", (event) => {
+      if (panelApps.get(event.data.id))
+        panelApps.finish(event.data.sessionID, event.data.id, event.data.text);
+    });
+    context.data.on("session.tool.called", (event) => {
+      if (panelApps.get(event.data.id))
+        panelApps.finish(event.data.sessionID, event.data.id, event.data.input);
+    });
     context.ui.slot({
       append: "session.panel",
       render: (input) => {
         if (input.name !== PANEL)
           return;
-        const view = new PanelAppRenderable(context.renderer, palette, directory);
+        const view = new PanelAppRenderable(context.renderer, input.sessionID, palette, directory);
         onCleanup(() => view.destroyRecursively());
         if (returnFocus)
           setTimeout(() => context.keymap.dispatch("pane.focus.left"), 0);
@@ -3699,8 +3683,62 @@ var plugin_default = {
         return view;
       }
     });
+    context.ui.slot({
+      append: "app",
+      render: () => {
+        context.keymap.layer(() => ({
+          mode: "global",
+          commands: [
+            {
+              id: "ui-blocks.open",
+              title: "Open UI app\u2026",
+              group: "UI apps",
+              palette: true,
+              enabled: () => viewing() !== undefined,
+              run: async () => {
+                const sessionID = viewing();
+                if (!sessionID)
+                  return;
+                await context.data.session.message.sync(sessionID);
+                const calls = history(context.data.session.message.list(sessionID));
+                if (calls.length === 0) {
+                  await context.ui.dialog.alert({ title: "UI apps", message: "No apps in this session yet." });
+                  return;
+                }
+                const id = await context.ui.dialog.select({
+                  title: "Open UI app",
+                  current: panelApps.selected(sessionID)?.id,
+                  options: calls.map((call) => ({ title: call.title, value: call.id }))
+                });
+                if (!id)
+                  return;
+                const call = calls.find((item) => item.id === id);
+                if (!panelApps.get(id)?.done)
+                  panelApps.finish(sessionID, id, call.input);
+                panelApps.select(sessionID, id);
+                open({ keepFocus: false });
+              }
+            }
+          ]
+        }));
+        return;
+      }
+    });
   }
 };
+function history(messages) {
+  return messages.flatMap((message) => {
+    const content = message.content;
+    return Array.isArray(content) ? content : [];
+  }).flatMap((part) => {
+    const tool = part;
+    const input = tool.state?.input;
+    if (tool.type !== "tool" || tool.name !== TOOL || !tool.id || !input || typeof input !== "object")
+      return [];
+    const title = input.title;
+    return [{ id: tool.id, title: typeof title === "string" ? title : "App", input }];
+  }).reverse();
+}
 export {
   plugin_default as default
 };

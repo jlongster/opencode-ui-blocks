@@ -1,13 +1,10 @@
 import { afterEach, expect, test } from "bun:test"
-import { createMarkdownCodeBlockRenderer, ImageRenderable, MarkdownRenderable, RGBA, SyntaxStyle, TextRenderable, type Renderable } from "@opentui/core"
+import { ImageRenderable, RGBA, TextRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing"
-import { createUiBlockRenderer } from "../../src/tui/block"
+import { controllerFor } from "../../src/tui/controller"
+import { UiBlockRenderable } from "../../src/tui/renderable"
 
-const widget = `Here you go:
-
-\`\`\`ui lua size=40x8 title="Tip"
--- {ID}
-local tip = 18
+const tip = `local tip = 18
 
 function frame()
   begin_row()
@@ -17,33 +14,39 @@ function frame()
     if button(pct .. "%") then tip = pct end
   end
   tip = slider(tip, 0, 30, 1, {width = 31})
-end
-\`\`\`
-
-Anything else?`
+end`
 
 let setup: TestRendererSetup | undefined
 afterEach(() => setup?.renderer.destroy())
 
-async function mount(id: string) {
+const color = RGBA.fromHex("#ffffff")
+const palette = { text: color, muted: color, accent: color, error: color, border: color }
+
+/**
+ * Mounts the widget for one controller the way the side panel does. `show` feeds it source (a
+ * prefix while streaming, then the whole program) and `remount` rebuilds the renderable, as when
+ * the panel closes and opens again.
+ */
+async function mount(id: string, frame: { height?: number } = {}) {
   setup = await createTestRenderer({ width: 60, height: 20, useMouse: true })
-  const color = RGBA.fromHex("#ffffff")
-  const markdown = new MarkdownRenderable(setup.renderer, {
-    syntaxStyle: SyntaxStyle.create(),
-    streaming: true,
-    internalBlockMode: "top-level",
-    // The host builds renderNode from registered code block renderers in exactly this way.
-    renderNode: createMarkdownCodeBlockRenderer({
-      ui: createUiBlockRenderer(setup.renderer, () => ({ text: color, muted: color, accent: color, error: color, border: color })),
-    }),
-  })
-  setup.renderer.root.add(markdown)
-  // Blocks are identified by their source, so each test gets its own copy of shared fixtures.
-  const write = async (text: string) => {
-    markdown.content = text.replace("{ID}", id)
-    await setup!.renderOnce()
+  const controller = controllerFor(`test:${id}`)
+  const block = () =>
+    new UiBlockRenderable(setup!.renderer, controller, { width: "auto", height: frame.height ?? "auto", title: id }, palette)
+  let view = block()
+  setup.renderer.root.add(view)
+  return {
+    setup,
+    show: async (source: string, final = true) => {
+      controller.update(source, final)
+      await setup!.renderOnce()
+    },
+    remount: async () => {
+      view.destroyRecursively()
+      view = block()
+      setup!.renderer.root.add(view)
+      await setup!.renderOnce()
+    },
   }
-  return { setup, write }
 }
 
 // Animations run on timers, so wait in real time rather than for a fixed number of passes.
@@ -69,15 +72,14 @@ const find = (frame: string, needle: string) => {
   return { x: frame.split("\n")[y].indexOf(needle), y }
 }
 
-test("a streamed ui block renders progressively and becomes interactive when closed", async () => {
-  const { setup, write } = await mount("prt_stream")
-
-  // Stream a prefix that ends mid-element: the frame and completed parts already render.
-  await write(widget.slice(0, widget.indexOf("  for _, pct")))
+test("a streaming program renders progressively and becomes interactive when complete", async () => {
+  const { setup, show } = await mount("stream")
+  // Cut partway into a line, as a live stream would be.
+  await show(tip.slice(0, tip.indexOf("ipairs")), false)
   const preview = await frameWith(setup, (frame) => frame.includes("Tip 18%"))
   expect(preview).toContain("streaming…")
 
-  await write(widget)
+  await show(tip)
   const live = await frameWith(setup, (frame) => frame.includes("[ 20% ]") && !frame.includes("streaming…"))
   const button = find(live, "[ 20% ]")
   await setup.mockMouse.click(button.x + 2, button.y)
@@ -85,8 +87,8 @@ test("a streamed ui block renders progressively and becomes interactive when clo
 })
 
 test("dragging the slider updates state", async () => {
-  const { setup, write } = await mount("prt_slider")
-  await write(widget)
+  const { setup, show } = await mount("slider")
+  await show(tip)
   const frame = await frameWith(setup, (frame) => frame.includes("●"))
   const thumb = find(frame, "●")
   // The slider spans 0..30 over 31 cells, so each cell is one step.
@@ -94,32 +96,27 @@ test("dragging the slider updates state", async () => {
   await frameWith(setup, (frame) => frame.includes("Tip 23%"))
 })
 
-test("state survives the markdown being recreated (e.g. scrolled away and back)", async () => {
-  const first = await mount("prt_remount")
-  await first.write(widget)
-  const live = await frameWith(first.setup, (frame) => frame.includes("[ 10% ]") && !frame.includes("streaming…"))
+test("state lives in the controller, so it survives the renderable being rebuilt", async () => {
+  const { setup, show, remount } = await mount("remount")
+  await show(tip)
+  const live = await frameWith(setup, (frame) => frame.includes("[ 10% ]"))
   const button = find(live, "[ 10% ]")
-  await first.setup.mockMouse.click(button.x + 2, button.y)
-  await frameWith(first.setup, (frame) => frame.includes("Tip 10%"))
-  first.setup.renderer.destroy()
-
-  const second = await mount("prt_remount")
-  await second.write(widget)
-  await frameWith(second.setup, (frame) => frame.includes("Tip 10%"))
+  await setup.mockMouse.click(button.x + 2, button.y)
+  await frameWith(setup, (frame) => frame.includes("Tip 10%"))
+  await remount()
+  await frameWith(setup, (frame) => frame.includes("Tip 10%"))
 })
 
-test("next_frame animates the block on its own", async () => {
-  const { setup, write } = await mount("prt_tick")
-  await write(
-    'Clock:\n\n```ui lua size=30x4 title="Clock"\nlocal frames = 0\nfunction frame() text("frames ", frames) end\nfunction tick() frames = frames + 1 next_frame(tick) end\nnext_frame(tick)\n```\n',
-  )
+test("next_frame animates the widget on its own", async () => {
+  const { setup, show } = await mount("tick")
+  await show('local frames = 0\nfunction frame() text("frames ", frames) end\nfunction tick() frames = frames + 1 next_frame(tick) end\nnext_frame(tick)')
   await frameWith(setup, (frame) => /frames [3-9]/.test(frame))
 })
 
 test("a click held across animation ticks still lands (buttons are patched, not rebuilt)", async () => {
-  const { setup, write } = await mount("prt_hold")
-  await write(
-    '```ui lua size=36x5 title="Anim"\nlocal n, playing = 0, true\nfunction frame()\n  text("frame ", n)\n  if button(playing and "Pause" or "Play") then\n    playing = not playing\n    if playing then next_frame(tick) end\n  end\nend\nfunction tick()\n  if not playing then return end\n  n = n + 1\n  next_frame(tick)\nend\nnext_frame(tick)\n```\n',
+  const { setup, show } = await mount("hold")
+  await show(
+    'local n, playing = 0, true\nfunction frame()\n  text("frame ", n)\n  if button(playing and "Pause" or "Play") then\n    playing = not playing\n    if playing then next_frame(tick) end\n  end\nend\nfunction tick()\n  if not playing then return end\n  n = n + 1\n  next_frame(tick)\nend\nnext_frame(tick)',
   )
   const live = await frameWith(setup, (frame) => frame.includes("[ Pause ]") && /frame [2-9]/.test(frame))
   const button = find(live, "[ Pause ]")
@@ -138,9 +135,9 @@ test("a click held across animation ticks still lands (buttons are patched, not 
 })
 
 test("keyed list items keep their renderables when the list reorders", async () => {
-  const { setup, write } = await mount("prt_keys")
-  await write(
-    '```ui lua size=30x6 title="List"\nlocal items = {"a", "b", "c"}\nfunction frame()\n  for _, item in ipairs(items) do text("item ", item, {key = item}) end\n  if button("Flip") then flip() end\nend\nfunction flip()\n  local r = {}\n  for i = #items, 1, -1 do r[#r + 1] = items[i] end\n  items = r\nend\n```\n',
+  const { setup, show } = await mount("keys")
+  await show(
+    'local items = {"a", "b", "c"}\nfunction frame()\n  for _, item in ipairs(items) do text("item ", item, {key = item}) end\n  if button("Flip") then flip() end\nend\nfunction flip()\n  local r = {}\n  for i = #items, 1, -1 do r[#r + 1] = items[i] end\n  items = r\nend',
   )
   const live = await frameWith(setup, (frame) => frame.includes("[ Flip ]"))
   const before = texts(setup.renderer.root)
@@ -153,24 +150,28 @@ test("keyed list items keep their renderables when the list reorders", async () 
   expect(["item a", "item b", "item c"].map((label) => after.get(label) === before.get(label))).toEqual([true, true, true])
 })
 
-test("without a size the frame grows to fit, and a frame that is too small clips instead of overlapping", async () => {
-  const lines = 'function frame()\n  text("GET api.example.com")\n  for i = 1, 12 do text("line ", i) end\n  text("footer")\nend'
-  const { setup, write } = await mount("prt_height")
-  await write("```ui lua title=\"Tall\"\n" + lines + "\n```\n")
+const lines = 'function frame()\n  text("GET api.example.com")\n  for i = 1, 12 do text("line ", i) end\n  text("footer")\nend'
+
+test("an auto-height frame grows to fit", async () => {
+  const { setup, show } = await mount("tall")
+  await show(lines)
   const tall = await frameWith(setup, (frame) => frame.includes("footer"))
   expect(tall).toContain("line 12")
+})
 
-  await write("```ui lua size=40x6 title=\"Short\"\n" + lines + "\n```\n")
-  const short = await frameWith(setup, (frame) => frame.includes("Short") && frame.includes("line 1"))
+test("a frame that is too small clips instead of overlapping", async () => {
+  const { setup, show } = await mount("short", { height: 6 })
+  await show(lines)
+  const short = await frameWith(setup, (frame) => frame.includes("line 1"))
   const rows = short.split("\n").filter((row) => row.includes("│"))
   // Each visible row holds exactly one line of the program, in order.
   expect(rows.map((row) => row.replace(/[│\s]+/g, " ").trim())).toEqual(["GET api.example.com", "line 1", "line 2", "line 3"])
 })
 
 test("item_hovered follows the mouse, including a list row's children", async () => {
-  const { setup, write } = await mount("prt_hover")
-  await write(
-    '```ui lua title="Hover"\nlocal hot\nfunction frame()\n  local any = false\n  for _, name in ipairs({"alpha", "beta"}) do\n    begin_row({key = name})\n      text(hot == name and "> " .. name or name)\n      button("open", {key = name})\n    end_row()\n    if item_hovered() then hot, any = name, true end\n  end\n  if not any then hot = nil end\n  text("over: ", hot or "none")\nend\n```\n',
+  const { setup, show } = await mount("hover")
+  await show(
+    'local hot\nfunction frame()\n  local any = false\n  for _, name in ipairs({"alpha", "beta"}) do\n    begin_row({key = name})\n      text(hot == name and "> " .. name or name)\n      button("open", {key = name})\n    end_row()\n    if item_hovered() then hot, any = name, true end\n  end\n  if not any then hot = nil end\n  text("over: ", hot or "none")\nend',
   )
   const live = await frameWith(setup, (frame) => frame.includes("over: none") && frame.includes("[ open ]"))
   const beta = find(live, "beta")
@@ -184,26 +185,6 @@ test("item_hovered follows the mouse, including a list row's children", async ()
   await frameWith(setup, (frame) => frame.includes("over: none") && !frame.includes("> "))
 })
 
-test("identical blocks share one widget, and both stay live", async () => {
-  const { setup, write } = await mount("prt_twins")
-  const block = '```ui lua title="Twin"\nlocal n = 0\nfunction frame()\n  text("n=", n)\n  if button("bump") then n = n + 1 end\nend\n```\n'
-  await write(block + "\nand again:\n\n" + block)
-  const live = await frameWith(setup, (frame) => frame.split("n=0").length === 3)
-  const button = find(live, "[ bump ]")
-  await setup.mockMouse.click(button.x + 2, button.y)
-  await frameWith(setup, (frame) => frame.split("n=1").length === 3)
-})
-
-test("a blank line separates the widget from the paragraph above it", async () => {
-  const { setup, write } = await mount("prt_gap")
-  await write('Here you go:\n```ui lua title="Gap"\nfunction frame() text("inside") end\n```\n')
-  const frame = await frameWith(setup, (frame) => frame.includes("inside"))
-  const lines = frame.split("\n")
-  const intro = lines.findIndex((line) => line.includes("Here you go:"))
-  expect(lines[intro + 1].trim()).toBe("")
-  expect(lines[intro + 2]).toContain("Gap")
-})
-
 function findImage(root: Renderable): ImageRenderable | undefined {
   if (root instanceof ImageRenderable) return root
   return root.getChildren().map(findImage).find((image) => image !== undefined)
@@ -214,8 +195,8 @@ test("image() shows a local file (relative to the session) and an http URL, size
   const server = Bun.serve({ port: 0, fetch: (request) => (new URL(request.url).pathname === "/checker.png" ? new Response(png) : new Response("no", { status: 404 })) })
   try {
     for (const src of ["test/fixtures/checker.png", `http://127.0.0.1:${server.port}/checker.png`]) {
-      const { setup, write } = await mount(`prt_image_${src.length}`)
-      await write(`\`\`\`ui lua title="Pic"\nfunction frame() image("${src}", {width = 20}) text("below") end\n\`\`\`\n`)
+      const { setup, show } = await mount(`image ${src.length}`)
+      await show(`function frame() image("${src}", {width = 20}) text("below") end`)
       await frameWith(setup, () => findImage(setup.renderer.root)?.image != null)
       const box = findImage(setup.renderer.root)!.parent!
       // 16x8 pixels at 20 cells wide keeps its 2:1 shape (cells are about twice as tall as wide).
@@ -233,10 +214,8 @@ test("image() shows a local file (relative to the session) and an http URL, size
 test("image() failures show in place without breaking the widget", async () => {
   const server = Bun.serve({ port: 0, fetch: () => new Response("no", { status: 404 }) })
   try {
-    const { setup, write } = await mount("prt_image_errors")
-    await write(
-      `\`\`\`ui lua title="Broken"\nfunction frame()\n  image("http://127.0.0.1:${server.port}/missing.png")\n  image("no/such/file.png")\n  text("still here")\nend\n\`\`\`\n`,
-    )
+    const { setup, show } = await mount("image errors")
+    await show(`function frame()\n  image("http://127.0.0.1:${server.port}/missing.png")\n  image("no/such/file.png")\n  text("still here")\nend`)
     const frame = await frameWith(setup, (frame) => frame.includes("HTTP 404") && frame.includes("file not found"))
     expect(frame).toContain("still here")
   } finally {

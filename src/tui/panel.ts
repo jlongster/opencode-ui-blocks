@@ -1,25 +1,57 @@
-import { BoxRenderable, TextAttributes, TextRenderable, type MouseEvent, type RenderContext } from "@opentui/core"
-import type { UiFence } from "../index"
+import { BoxRenderable, TextRenderable, type RenderContext } from "@opentui/core"
 import { controllerFor } from "./controller"
+import { partialString } from "./partial-json"
 import { UiBlockRenderable, type UiPalette } from "./renderable"
 
 export const PANEL = "ui-blocks"
+export const TOOL = "ui_app"
 
-/** An app as the panel needs it: which controller holds its state, and its fence settings. */
-export type PanelApp = { key: string; frame: UiFence.Frame }
+/** One `ui_app` tool call. Its id keys the controller, so each call keeps its own state. */
+export type App = { id: string; sessionID: string; title: string; input: string; done: boolean }
 
-let shown: PanelApp | undefined
+const apps = new Map<string, App>()
+const selected = new Map<string, string>()
 const listeners = new Set<() => void>()
+const notify = () => listeners.forEach((listener) => listener())
 
-/** Which app the side panel shows. Shared by the transcript cards and the panel itself. */
+/**
+ * The apps the model has opened, fed by the tool call's input as it streams: `begin` on
+ * `session.tool.input.started`, `delta` per fragment, `finish` once the input is complete.
+ */
 export const panelApps = {
-  get shown() {
-    return shown
+  get(id: string) {
+    return apps.get(id)
   },
-  show(app: PanelApp) {
-    if (shown?.key === app.key && shown.frame === app.frame) return
-    shown = app
-    listeners.forEach((listener) => listener())
+  selected(sessionID: string) {
+    const id = selected.get(sessionID)
+    return id === undefined ? undefined : apps.get(id)
+  },
+  select(sessionID: string, id: string) {
+    if (selected.get(sessionID) === id) return
+    selected.set(sessionID, id)
+    notify()
+  },
+  begin(sessionID: string, id: string) {
+    if (!apps.has(id)) apps.set(id, { id, sessionID, title: "App", input: "", done: false })
+    if (selected.get(sessionID) === id) return notify()
+    this.select(sessionID, id)
+  },
+  delta(id: string, delta: string) {
+    const app = apps.get(id)
+    if (!app || app.done) return
+    app.input += delta
+    sync(app)
+  },
+  /** The complete input: raw JSON text, or the parsed object from a finished or stored call. */
+  finish(sessionID: string, id: string, input: string | Record<string, unknown>) {
+    const app = apps.get(id) ?? { id, sessionID, title: "App", input: "", done: false }
+    apps.set(id, app)
+    const parsed = typeof input === "string" ? parse(input) : input
+    if (!parsed) return
+    app.input = JSON.stringify(parsed)
+    app.done = true
+    sync(app)
+    notify()
   },
   subscribe(listener: () => void) {
     listeners.add(listener)
@@ -27,7 +59,30 @@ export const panelApps = {
   },
 }
 
-/** The side panel's content: the shown app, filling the panel. */
+/** Pushes what has arrived of an app's input into its controller. */
+function sync(app: App) {
+  const title = partialString(app.input, "title")
+  const changed = title !== undefined && title !== app.title
+  if (title !== undefined) app.title = title
+  const lua = partialString(app.input, "lua")
+  if (lua === undefined) return changed ? notify() : undefined
+  const controller = controllerFor(app.id)
+  const first = controller.source === "" && lua !== ""
+  // Mid-stream the source is a prefix; the controller closes it off and previews it.
+  controller.update(lua, app.done)
+  if (changed || first) notify()
+}
+
+function parse(text: string) {
+  try {
+    const value: unknown = JSON.parse(text)
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The side panel's content for one session: its selected app, filling the panel. */
 export class PanelAppRenderable extends BoxRenderable {
   private unsubscribe: () => void
   /** What is drawn now; null until the first update (undefined means "no app"). */
@@ -35,6 +90,7 @@ export class PanelAppRenderable extends BoxRenderable {
 
   constructor(
     ctx: RenderContext,
+    private sessionID: string,
     private palette: () => UiPalette,
     private directory: () => string,
   ) {
@@ -44,78 +100,23 @@ export class PanelAppRenderable extends BoxRenderable {
   }
 
   private update() {
-    const app = panelApps.shown
-    const key = app ? `${app.key}\n${app.frame.title ?? ""}` : undefined
+    const app = panelApps.selected(this.sessionID)
+    // OpenCode only hands a tool its input once the model has finished writing it.
+    const writing = app !== undefined && !app.done && partialString(app.input, "lua") === undefined
+    const key = app ? `${app.id}\n${app.title}\n${writing}` : undefined
     if (this.isDestroyed || key === this.current) return
     this.current = key
     this.getChildren().forEach((child) => child.destroyRecursively())
     if (!app) {
-      this.add(new TextRenderable(this.ctx, { content: "No app yet. Ask for a ```ui lua widget.", fg: this.palette().muted }))
+      this.add(new TextRenderable(this.ctx, { content: "No app in this session yet.", fg: this.palette().muted }))
       return
     }
-    // The panel sizes the app; the fence's size= only applies inline.
-    const frame = { ...app.frame, width: "auto" as const, height: "auto" as const }
-    this.add(new UiBlockRenderable(this.ctx, controllerFor(app.key), frame, this.palette(), this.directory, { fill: true }))
-  }
-
-  protected override destroySelf() {
-    this.unsubscribe()
-    super.destroySelf()
-  }
-}
-
-/**
- * Stands in for a ```ui block in the transcript when apps open in the side panel. Clicking it
- * shows that app in the panel again.
- */
-export class AppCardRenderable extends BoxRenderable {
-  private unsubscribe: () => void
-  private status: TextRenderable
-  private action: TextRenderable
-  private shownText = ""
-
-  constructor(
-    ctx: RenderContext,
-    private app: PanelApp,
-    private streaming: boolean,
-    private palette: UiPalette,
-    private open: () => void,
-  ) {
-    super(ctx, {
-      border: true,
-      borderStyle: "rounded",
-      borderColor: palette.border,
-      title: ` ${app.frame.title ?? "App"} `,
-      flexDirection: "row",
-      gap: 2,
-      paddingLeft: 1,
-      paddingRight: 1,
-      marginTop: 1,
-      width: "100%",
-    })
-    this.status = new TextRenderable(ctx, { content: "", fg: palette.muted, flexGrow: 1, flexShrink: 1 })
-    this.action = new TextRenderable(ctx, { content: "", fg: palette.accent, attributes: TextAttributes.BOLD, selectable: false, flexShrink: 0 })
-    this.action.onMouseDown = (event: MouseEvent) => {
-      if (event.button !== 0) return
-      event.stopPropagation()
-      panelApps.show(this.app)
-      this.open()
+    if (writing) {
+      this.add(new TextRenderable(this.ctx, { content: "Writing the app…", fg: this.palette().muted }))
+      return
     }
-    this.add(this.status)
-    this.add(this.action)
-    this.unsubscribe = panelApps.subscribe(() => this.update())
-    this.update()
-  }
-
-  private update() {
-    if (this.isDestroyed) return
-    const showing = panelApps.shown?.key === this.app.key
-    const status = this.streaming ? "streaming into the side panel…" : showing ? "running in the side panel" : "app"
-    const action = showing ? "[ Show panel ]" : "[ Open in panel ]"
-    if (this.shownText === status + action) return
-    this.shownText = status + action
-    this.status.content = status
-    this.action.content = action
+    const frame = { width: "auto" as const, height: "auto" as const, title: app.title }
+    this.add(new UiBlockRenderable(this.ctx, controllerFor(app.id), frame, this.palette(), this.directory, { fill: true }))
   }
 
   protected override destroySelf() {

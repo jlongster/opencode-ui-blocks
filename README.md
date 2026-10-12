@@ -1,22 +1,17 @@
 # opencode-ui-blocks
 
-Interactive widgets in the OpenCode TUI. The model writes a small Lua program in a
-` ```ui lua ` fence; the plugin runs it in its own interpreter and draws it as a live widget with
-buttons, sliders, progress bars, images and animation, while the reply is still streaming.
+Interactive apps in the OpenCode TUI. The model calls the `ui_app` tool with a small Lua program;
+the plugin runs it in its own interpreter and shows it in the right-hand session panel: buttons,
+sliders, progress bars, images, hover and animation.
 
-````
-```ui lua title="Counter"
-local count = 0
-
-function frame()
-  text("Count: ", count)
-  begin_row()
-    if button("+") then count = count + 1 end
-    if button("Reset") then count = 0 end
-  end_row()
-end
+```json
+{
+  "title": "Counter",
+  "program": {
+    "lua": "local count = 0\nfunction frame()\n  text(\"Count: \", count)\n  if button(\"+\") then count = count + 1 end\nend"
+  }
+}
 ```
-````
 
 ## Install
 
@@ -26,25 +21,19 @@ Add the plugin to your OpenCode config:
 { "plugins": ["/path/to/opencode-ui-blocks"] }
 ```
 
-- **TUI side** (`tui.js`, built from `src/tui/plugin.ts`): registers a markdown code block renderer
-  for `ui` fences and a `session.panel` slot.
-- **Server side** (`server.ts`): registers a `ui-blocks` skill containing [`spec.md`](./spec.md),
-  so the model can look up how to write widgets when one would help.
+- **Server side** (`server.ts`): registers the `ui_app` tool. Its description is [`spec.md`](./spec.md),
+  the language and API reference. The tool loads the program and draws a first frame; if that fails,
+  the error goes back to the model so it can fix the program and call again.
+- **TUI side** (`tui.js`, built from `src/tui/plugin.ts`): watches the session's tool events, opens
+  the session panel when a `ui_app` call starts, and runs the app there. The transcript shows the
+  call as one line (`✓ ui_app [title=Counter]`), not the program.
 
-## Where apps appear
+## Using it
 
-By default an app runs in the **right-hand session panel**. When a reply starts streaming a
-` ```ui ` block, the plugin opens the panel and the app streams into it; the transcript shows a
-card ("running in the side panel") whose button brings that app back later. Apps from history
-only show their card and never take the panel over. Opening the panel automatically hands the
-keyboard back to the prompt, so you can keep typing.
-
-To render apps inline in the transcript instead, set the option on the plugin's entry in the
-**TUI** config (TUI plugin options are read from there):
-
-```json
-{ "plugins": [{ "package": "/path/to/opencode-ui-blocks", "options": { "display": "inline" } }] }
-```
+- A new app opens the panel on its own and leaves the keyboard with the prompt.
+- Each call is its own app with its own state. **Open UI app…** in the command palette lists the
+  session's apps (newest first) and reopens one, with its state if it ran in this TUI.
+- The panel can be resized and made fullscreen like any session panel.
 
 ## Layout
 
@@ -52,9 +41,9 @@ To render apps inline in the transcript instead, set the option on the plugin's 
 | --- | --- |
 | `src/lua/` | Lua 5.1-style interpreter: lexer, parser, resolver, closure compiler, standard library (string patterns, `string.format`, `table`, `math`). No dependencies. |
 | `src/widget.ts` | Widget runtime: `frame()`, controls and their ids, events, `item_hovered()`, `next_frame`, rollback of failed runs, limits. Produces a plain view tree. |
-| `src/stream.ts` | Closes a partially streamed program so it can render before the fence ends. |
-| `src/fence.ts` | Reads `size=` and `title=` from the fence line. |
-| `src/tui/` | Plugin entry, OpenTUI renderable (fiber reconciler, mouse handling), the per-block controller, the side panel and transcript card, and the image loader. |
+| `src/stream.ts` | Closes a partially written program so it can render before it is complete. |
+| `src/fence.ts` | Frame size and title types. |
+| `src/tui/` | Plugin entry (tool events, panel slot, palette command), the panel, the OpenTUI renderable (fiber reconciler, mouse handling), the per-app controller and the image loader. |
 | `spec.md` | The language and API reference given to the model. |
 
 ## Development
@@ -85,9 +74,9 @@ coloured half-blocks elsewhere. URLs are fetched as soon as the widget renders.
 
 ## Known limits
 
-- Code block renderers are not told which message a block is in, so a block is identified by its
-  source. Two identical blocks in one session share their state.
+- **Apps appear once the model has finished writing them.** OpenCode streams a tool call's input to
+  the server but only publishes it to clients when it is complete, so the panel says "Writing the
+  app…" until then. The TUI side already consumes `session.tool.input.delta` events, so apps will
+  build up live as soon as OpenCode publishes them.
 - Mouse only: there is no text input yet.
-- Controls become clickable once the fence closes; while streaming the widget is a preview.
-- An app that arrives already complete (e.g. a very fast stream) counts as history: it shows its
-  card, and its button opens it in the panel.
+- The model does not see what the user does in an app.

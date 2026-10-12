@@ -1,13 +1,17 @@
-# Interactive UI blocks (Lua)
+# ui_app
 
-Write a small Lua program inside a ` ```ui lua ` fence. It draws an interactive widget in the
-conversation. Optional settings go on the fence line: `title="…"` and `size=WIDTHxHEIGHT` in cells
-(e.g. `44x9`). Either side may be `auto`, and both default to it: the widget fills the width and
-grows to fit what `frame()` draws, so usually leave the height out.
+Shows the user a small interactive app, written in Lua, in the side panel of their terminal.
+Use it when something they can click, drag or watch would answer better than text: calculators,
+converters, timers, small games, charts, checklists, dashboards and explainers.
+
+Input: `title` (shown on the panel) and `program.lua` (the Lua source below). The app appears and
+runs while you are still writing it, and you get back an error with a line number if it fails to
+load or draw, so fix it and call again. You do not see what the user does in the app. Do not repeat
+the program in your reply; say what the app does instead.
 
 ## Program shape
 
-Write the program in this order, so the widget can appear while it is still being written:
+Write the program in this order, so the app can appear while it is still being written:
 
 1. **State**: top-level `local` variables. They are set once, when the program loads.
 2. **`function frame()`**: draws the UI. It runs again after every click, slider change and queued

@@ -18,7 +18,8 @@ test("tui.js is up to date and imports nothing but host packages (@opentui/core,
   expect([...host].sort()).toEqual(["@opentui/core", "solid-js"])
 })
 
-test("server.ts has no runtime imports", async () => {
+test("server.ts imports only the plugin's own files at runtime", async () => {
   const source = await Bun.file(new URL("../server.ts", import.meta.url)).text()
-  expect(new Bun.Transpiler({ loader: "ts" }).scan(source).imports).toEqual([])
+  const imports = new Bun.Transpiler({ loader: "ts" }).scan(source).imports.map((item) => item.path)
+  expect(imports.every((path) => path.startsWith("./"))).toBe(true)
 })
