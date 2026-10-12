@@ -3654,22 +3654,6 @@ var plugin_default = {
       returnFocus = options.keepFocus;
       context.ui.panel.open(PANEL);
     };
-    context.data.on("session.tool.input.started", (event) => {
-      if (event.data.name !== TOOL)
-        return;
-      panelApps.begin(event.data.sessionID, event.data.id);
-      if (viewing() === event.data.sessionID)
-        open({ keepFocus: true });
-    });
-    context.data.on("session.tool.input.delta", (event) => panelApps.delta(event.data.id, event.data.delta));
-    context.data.on("session.tool.input.ended", (event) => {
-      if (panelApps.get(event.data.id))
-        panelApps.finish(event.data.sessionID, event.data.id, event.data.text);
-    });
-    context.data.on("session.tool.called", (event) => {
-      if (panelApps.get(event.data.id))
-        panelApps.finish(event.data.sessionID, event.data.id, event.data.input);
-    });
     context.ui.slot({
       append: "session.panel",
       render: (input) => {
@@ -3724,6 +3708,25 @@ var plugin_default = {
         return;
       }
     });
+    const unsubscribe = [
+      context.data.on("session.tool.input.started", (event) => {
+        if (event.data.name !== TOOL)
+          return;
+        panelApps.begin(event.data.sessionID, event.data.id);
+        if (viewing() === event.data.sessionID)
+          open({ keepFocus: true });
+      }),
+      context.data.on("session.tool.input.delta", (event) => panelApps.delta(event.data.id, event.data.delta)),
+      context.data.on("session.tool.input.ended", (event) => {
+        if (panelApps.get(event.data.id))
+          panelApps.finish(event.data.sessionID, event.data.id, event.data.text);
+      }),
+      context.data.on("session.tool.called", (event) => {
+        if (panelApps.get(event.data.id))
+          panelApps.finish(event.data.sessionID, event.data.id, event.data.input);
+      })
+    ];
+    return () => unsubscribe.forEach((stop) => stop());
   }
 };
 function history(messages) {
