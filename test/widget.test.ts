@@ -178,6 +178,11 @@ next_frame(tick)`)
     expect(widget.nextDue).toBeUndefined()
   })
 
+  test("containers pass gap, padding (clamped) and border to the view", () => {
+    const { widget } = mount(`function frame() begin_col({gap = 1, padding = 9, border = true}) text("x") end_col() end`)
+    expect((widget.render().view[0] as { p: unknown }).p).toEqual({ gap: 1, padding: 4, border: true })
+  })
+
   test("layout containers nest, auto-close with a warning, and mismatches are errors", () => {
     const { widget } = mount(`function frame() begin_row() text("a") begin_col() text("b") end`)
     const view = widget.render().view

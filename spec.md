@@ -42,7 +42,7 @@ end
 | `slider(value, min, max, step)` | A slider showing `value` (`step` defaults to 1) | the new value: the dragged value on the frame it changed, otherwise `value` |
 | `progress(value, max)` | A progress bar | – |
 | `divider()` | A horizontal line | – |
-| `begin_row(opts)` … `end_row()` | Lays out what is drawn between them side by side. `opts` (optional): `{gap=N, border=true, key=…}` | – |
+| `begin_row(opts)` … `end_row()` | Lays out what is drawn between them side by side. `opts` (optional): `{gap=N, padding=N, border=true, key=…}` | – |
 | `begin_col(opts)` … `end_col()` | Lays out what is drawn between them vertically (same options) | – |
 | `item_hovered()` | – | `true` while the mouse is over the element drawn just before it (after `end_row()`, the whole row, including what is inside it) |
 | `next_frame(fn, ms)` | Queues `fn(dt)` to run before the next frame, or after `ms` milliseconds. `dt` is the milliseconds since it was queued | – |

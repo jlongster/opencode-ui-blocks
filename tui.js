@@ -2832,6 +2832,9 @@ class Widget {
         const gap = opts?.get("gap");
         if (typeof gap === "number")
           p.gap = gap;
+        const padding = opts?.get("padding");
+        if (typeof padding === "number")
+          p.padding = Math.max(0, Math.min(4, padding));
         if (opts?.get("border") === true)
           p.border = true;
         const build = this.builder(`begin_${kind}`);
