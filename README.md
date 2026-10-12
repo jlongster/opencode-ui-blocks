@@ -27,9 +27,24 @@ Add the plugin to your OpenCode config:
 ```
 
 - **TUI side** (`tui.js`, built from `src/tui/plugin.ts`): registers a markdown code block renderer
-  for `ui` fences.
+  for `ui` fences and a `session.panel` slot.
 - **Server side** (`server.ts`): registers a `ui-blocks` skill containing [`spec.md`](./spec.md),
   so the model can look up how to write widgets when one would help.
+
+## Where apps appear
+
+By default an app runs in the **right-hand session panel**. When a reply starts streaming a
+` ```ui ` block, the plugin opens the panel and the app streams into it; the transcript shows a
+card ("running in the side panel") whose button brings that app back later. Apps from history
+only show their card and never take the panel over. Opening the panel automatically hands the
+keyboard back to the prompt, so you can keep typing.
+
+To render apps inline in the transcript instead, set the option on the plugin's entry in the
+**TUI** config (TUI plugin options are read from there):
+
+```json
+{ "plugins": [{ "package": "/path/to/opencode-ui-blocks", "options": { "display": "inline" } }] }
+```
 
 ## Layout
 
@@ -39,7 +54,7 @@ Add the plugin to your OpenCode config:
 | `src/widget.ts` | Widget runtime: `frame()`, controls and their ids, events, `item_hovered()`, `next_frame`, rollback of failed runs, limits. Produces a plain view tree. |
 | `src/stream.ts` | Closes a partially streamed program so it can render before the fence ends. |
 | `src/fence.ts` | Reads `size=` and `title=` from the fence line. |
-| `src/tui/` | Plugin entry, OpenTUI renderable (fiber reconciler, mouse handling), the per-block controller and the image loader. |
+| `src/tui/` | Plugin entry, OpenTUI renderable (fiber reconciler, mouse handling), the per-block controller, the side panel and transcript card, and the image loader. |
 | `spec.md` | The language and API reference given to the model. |
 
 ## Development
@@ -74,3 +89,5 @@ coloured half-blocks elsewhere. URLs are fetched as soon as the widget renders.
   source. Two identical blocks in one session share their state.
 - Mouse only: there is no text input yet.
 - Controls become clickable once the fence closes; while streaming the widget is a preview.
+- An app that arrives already complete (e.g. a very fast stream) counts as history: it shows its
+  card, and its button opens it in the panel.

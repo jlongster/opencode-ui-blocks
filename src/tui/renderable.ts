@@ -58,21 +58,23 @@ export class UiBlockRenderable extends BoxRenderable {
     private palette: UiPalette,
     /** Where relative image paths resolve: the session's directory. */
     private directory: () => string = () => process.cwd(),
+    /** fill: take the whole parent (the side panel) instead of sizing to the content. */
+    layout: { fill?: boolean } = {},
   ) {
     super(ctx, {
       border: true,
       borderStyle: "rounded",
       title: frame.title ? ` ${frame.title} ` : undefined,
-      height: frame.height,
-      maxHeight: frame.height === "auto" ? UiFence.MAX_HEIGHT : undefined,
-      width: frame.width === "auto" ? "100%" : frame.width,
+      height: layout.fill ? "100%" : frame.height,
+      maxHeight: !layout.fill && frame.height === "auto" ? UiFence.MAX_HEIGHT : undefined,
+      width: layout.fill || frame.width === "auto" ? "100%" : frame.width,
       maxWidth: "100%",
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
       overflow: "hidden",
       // Markdown adds no gap above code blocks; it keeps the larger of this and its own margin.
-      marginTop: 1,
+      marginTop: layout.fill ? 0 : 1,
     })
     this.detach = controller.attach(() => this.update())
     this.onSizeChange = () => this.caption()

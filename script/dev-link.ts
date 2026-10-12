@@ -14,6 +14,8 @@ const tui = path.join(repo, "packages/tui/node_modules")
 const links = {
   "@opencode/plugin": path.join(repo, "packages/plugin"),
   "@opentui/core": path.join(tui, "@opentui/core"),
+  "@opentui/solid": path.join(tui, "@opentui/solid"),
+  "solid-js": path.join(tui, "solid-js"),
   "@types/bun": path.join(tui, "@types/bun"),
   "@typescript/native-preview": path.join(repo, "node_modules/@typescript/native-preview"),
 }

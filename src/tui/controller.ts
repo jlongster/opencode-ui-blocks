@@ -13,6 +13,8 @@ export class UiController {
   error: string | undefined
   private widget: UiWidget.Widget | undefined
   private viewJson = "[]"
+  /** Whether listeners last saw a finished (interactive) block. */
+  private shownFinal = false
   /** Every mounted renderable showing this block; identical blocks share one controller. */
   private listeners = new Set<() => void>()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -77,7 +79,9 @@ export class UiController {
     const error = render.error
     const view = error && keepOnError ? this.view : render.view
     const json = JSON.stringify(view)
-    if (json === this.viewJson && error === this.error) return
+    // The finished program often draws exactly what its last preview did, but controls become live.
+    if (json === this.viewJson && error === this.error && this.shownFinal === this.final) return
+    this.shownFinal = this.final
     this.view = view
     this.viewJson = json
     this.error = error
@@ -132,4 +136,15 @@ export function controllerFor(key: string) {
   controllers.set(key, created)
   if (controllers.size > MAX_CONTROLLERS) controllers.delete(controllers.keys().next().value!)
   return created
+}
+
+/**
+ * Hands the streaming block's controller to the finished block, so whatever already shows it (the
+ * side panel) goes live when the fence closes instead of waiting for markdown to render again.
+ */
+export function promoteController(from: string, to: string) {
+  const streaming = controllers.get(from)
+  if (!streaming || controllers.has(to)) return
+  controllers.delete(from)
+  controllers.set(to, streaming)
 }

@@ -29,6 +29,12 @@
       ],
       "@opencode/plugin/tui": [
         "./.dev/node_modules/@opencode/plugin/src/tui/index.ts"
+      ],
+      "@opentui/solid": [
+        "./.dev/node_modules/@opentui/solid"
+      ],
+      "solid-js": [
+        "./.dev/node_modules/solid-js"
       ]
     },
     "typeRoots": [

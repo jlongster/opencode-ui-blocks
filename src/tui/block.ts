@@ -1,6 +1,7 @@
 import type { MarkdownCodeBlockRenderer, RenderContext } from "@opentui/core"
 import { UiFence } from "../index"
-import { controllerFor } from "./controller"
+import { controllerFor, promoteController } from "./controller"
+import { AppCardRenderable, panelApps } from "./panel"
 import { UiBlockRenderable, type UiPalette } from "./renderable"
 
 /**
@@ -11,6 +12,8 @@ export function createUiBlockRenderer(
   renderer: RenderContext,
   palette: () => UiPalette,
   directory?: () => string,
+  /** When given, apps run in the side panel and the transcript shows a card; `open` reveals the panel. */
+  panel?: { open: (options?: { keepFocus?: boolean }) => void },
 ): MarkdownCodeBlockRenderer {
   return (token) => {
     const frame = UiFence.parseFence(token.lang ?? "")
@@ -18,9 +21,22 @@ export function createUiBlockRenderer(
     // Until the fence line ends, its size and title may still be streaming in.
     if (!token.raw.includes("\n")) return undefined
     const closed = isClosed(token.raw)
-    const controller = controllerFor(closed ? `block:${Bun.hash(token.lang + "\n" + token.text)}` : `streaming:${token.lang}`)
+    const streamingKey = `streaming:${token.lang}`
+    const key = closed ? `block:${Bun.hash(token.lang + "\n" + token.text)}` : streamingKey
+    if (closed) promoteController(streamingKey, key)
+    const controller = controllerFor(key)
     controller.update(token.text, closed)
-    return new UiBlockRenderable(renderer, controller, frame, palette(), directory)
+    if (!panel) return new UiBlockRenderable(renderer, controller, frame, palette(), directory)
+    const app = { key, frame }
+    // A reply streaming an app takes the panel; once the fence closes the panel follows it to the
+    // finished app. Closed apps from history only show a card and never take the panel.
+    if (!closed && panelApps.shown?.key !== key) {
+      panelApps.show(app)
+      // Opened on the app's behalf, not by a click: the user may be typing the next prompt.
+      panel.open({ keepFocus: true })
+    }
+    if (closed && panelApps.shown?.key === streamingKey) panelApps.show(app)
+    return new AppCardRenderable(renderer, app, !closed, palette(), () => panel.open())
   }
 }
 

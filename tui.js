@@ -1,4 +1,7 @@
 // @bun
+// src/tui/plugin.ts
+import { onCleanup } from "solid-js";
+
 // src/lua/value.ts
 class Journal {
   entries = [];
@@ -2969,6 +2972,7 @@ class UiController {
   error;
   widget;
   viewJson = "[]";
+  shownFinal = false;
   listeners = new Set;
   timer;
   lastFrame = 0;
@@ -3022,8 +3026,9 @@ class UiController {
     const error = render.error;
     const view = error && keepOnError ? this.view : render.view;
     const json = JSON.stringify(view);
-    if (json === this.viewJson && error === this.error)
+    if (json === this.viewJson && error === this.error && this.shownFinal === this.final)
       return;
+    this.shownFinal = this.final;
     this.view = view;
     this.viewJson = json;
     this.error = error;
@@ -3068,6 +3073,16 @@ function controllerFor(key) {
     controllers.delete(controllers.keys().next().value);
   return created;
 }
+function promoteController(from, to) {
+  const streaming = controllers.get(from);
+  if (!streaming || controllers.has(to))
+    return;
+  controllers.delete(from);
+  controllers.set(to, streaming);
+}
+
+// src/tui/panel.ts
+import { BoxRenderable as BoxRenderable2, TextAttributes as TextAttributes2, TextRenderable as TextRenderable2 } from "@opentui/core";
 
 // src/tui/renderable.ts
 import {
@@ -3143,20 +3158,20 @@ class UiBlockRenderable extends BoxRenderable {
   fibers = [];
   ids = new WeakMap;
   hoverSeq = 0;
-  constructor(ctx, controller, frame, palette, directory = () => process.cwd()) {
+  constructor(ctx, controller, frame, palette, directory = () => process.cwd(), layout = {}) {
     super(ctx, {
       border: true,
       borderStyle: "rounded",
       title: frame.title ? ` ${frame.title} ` : undefined,
-      height: frame.height,
-      maxHeight: frame.height === "auto" ? MAX_HEIGHT : undefined,
-      width: frame.width === "auto" ? "100%" : frame.width,
+      height: layout.fill ? "100%" : frame.height,
+      maxHeight: !layout.fill && frame.height === "auto" ? MAX_HEIGHT : undefined,
+      width: layout.fill || frame.width === "auto" ? "100%" : frame.width,
       maxWidth: "100%",
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
       overflow: "hidden",
-      marginTop: 1
+      marginTop: layout.fill ? 0 : 1
     });
     this.controller = controller;
     this.palette = palette;
@@ -3494,8 +3509,119 @@ function colorOf(value, palette) {
   return;
 }
 
+// src/tui/panel.ts
+var PANEL = "ui-blocks";
+var shown;
+var listeners = new Set;
+var panelApps = {
+  get shown() {
+    return shown;
+  },
+  show(app) {
+    if (shown?.key === app.key && shown.frame === app.frame)
+      return;
+    shown = app;
+    listeners.forEach((listener) => listener());
+  },
+  subscribe(listener) {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+};
+
+class PanelAppRenderable extends BoxRenderable2 {
+  palette;
+  directory;
+  unsubscribe;
+  current = null;
+  constructor(ctx, palette, directory) {
+    super(ctx, { width: "100%", height: "100%", flexDirection: "column", padding: 1 });
+    this.palette = palette;
+    this.directory = directory;
+    this.unsubscribe = panelApps.subscribe(() => this.update());
+    this.update();
+  }
+  update() {
+    const app = panelApps.shown;
+    const key = app ? `${app.key}
+${app.frame.title ?? ""}` : undefined;
+    if (this.isDestroyed || key === this.current)
+      return;
+    this.current = key;
+    this.getChildren().forEach((child) => child.destroyRecursively());
+    if (!app) {
+      this.add(new TextRenderable2(this.ctx, { content: "No app yet. Ask for a ```ui lua widget.", fg: this.palette().muted }));
+      return;
+    }
+    const frame = { ...app.frame, width: "auto", height: "auto" };
+    this.add(new UiBlockRenderable(this.ctx, controllerFor(app.key), frame, this.palette(), this.directory, { fill: true }));
+  }
+  destroySelf() {
+    this.unsubscribe();
+    super.destroySelf();
+  }
+}
+
+class AppCardRenderable extends BoxRenderable2 {
+  app;
+  streaming;
+  palette;
+  open;
+  unsubscribe;
+  status;
+  action;
+  shownText = "";
+  constructor(ctx, app, streaming, palette, open) {
+    super(ctx, {
+      border: true,
+      borderStyle: "rounded",
+      borderColor: palette.border,
+      title: ` ${app.frame.title ?? "App"} `,
+      flexDirection: "row",
+      gap: 2,
+      paddingLeft: 1,
+      paddingRight: 1,
+      marginTop: 1,
+      width: "100%"
+    });
+    this.app = app;
+    this.streaming = streaming;
+    this.palette = palette;
+    this.open = open;
+    this.status = new TextRenderable2(ctx, { content: "", fg: palette.muted, flexGrow: 1, flexShrink: 1 });
+    this.action = new TextRenderable2(ctx, { content: "", fg: palette.accent, attributes: TextAttributes2.BOLD, selectable: false, flexShrink: 0 });
+    this.action.onMouseDown = (event) => {
+      if (event.button !== 0)
+        return;
+      event.stopPropagation();
+      panelApps.show(this.app);
+      this.open();
+    };
+    this.add(this.status);
+    this.add(this.action);
+    this.unsubscribe = panelApps.subscribe(() => this.update());
+    this.update();
+  }
+  update() {
+    if (this.isDestroyed)
+      return;
+    const showing = panelApps.shown?.key === this.app.key;
+    const status = this.streaming ? "streaming into the side panel\u2026" : showing ? "running in the side panel" : "app";
+    const action = showing ? "[ Show panel ]" : "[ Open in panel ]";
+    if (this.shownText === status + action)
+      return;
+    this.shownText = status + action;
+    this.status.content = status;
+    this.action.content = action;
+  }
+  destroySelf() {
+    this.unsubscribe();
+    super.destroySelf();
+  }
+}
+
 // src/tui/block.ts
-function createUiBlockRenderer(renderer, palette, directory) {
+function createUiBlockRenderer(renderer, palette, directory, panel) {
   return (token) => {
     const frame = parseFence(token.lang ?? "");
     if (!frame)
@@ -3504,10 +3630,23 @@ function createUiBlockRenderer(renderer, palette, directory) {
 `))
       return;
     const closed = isClosed(token.raw);
-    const controller = controllerFor(closed ? `block:${Bun.hash(token.lang + `
-` + token.text)}` : `streaming:${token.lang}`);
+    const streamingKey = `streaming:${token.lang}`;
+    const key = closed ? `block:${Bun.hash(token.lang + `
+` + token.text)}` : streamingKey;
+    if (closed)
+      promoteController(streamingKey, key);
+    const controller = controllerFor(key);
     controller.update(token.text, closed);
-    return new UiBlockRenderable(renderer, controller, frame, palette(), directory);
+    if (!panel)
+      return new UiBlockRenderable(renderer, controller, frame, palette(), directory);
+    const app = { key, frame };
+    if (!closed && panelApps.shown?.key !== key) {
+      panelApps.show(app);
+      panel.open({ keepFocus: true });
+    }
+    if (closed && panelApps.shown?.key === streamingKey)
+      panelApps.show(app);
+    return new AppCardRenderable(renderer, app, !closed, palette(), () => panel.open());
   };
 }
 function isClosed(raw) {
@@ -3526,13 +3665,40 @@ function isClosed(raw) {
 var plugin_default = {
   id: "opencode-ui-blocks",
   setup(context) {
-    context.markdown.registerCodeBlockRenderer("ui", createUiBlockRenderer(context.renderer, () => ({
+    const palette = () => ({
       text: context.theme.text.base,
       muted: context.theme.text.muted,
       accent: context.theme.text.action.primary.base,
       error: context.theme.text.feedback.error.base,
       border: context.theme.border.base
-    }), () => context.location?.directory ?? process.cwd()));
+    });
+    const directory = () => context.location?.directory ?? process.cwd();
+    const inline = context.options.display === "inline";
+    let returnFocus = false;
+    const panel = inline ? undefined : {
+      open: (options) => {
+        if (context.ui.panel.current()?.name === PANEL)
+          return;
+        returnFocus = options?.keepFocus === true;
+        context.ui.panel.open(PANEL);
+      }
+    };
+    context.markdown.registerCodeBlockRenderer("ui", createUiBlockRenderer(context.renderer, palette, directory, panel));
+    if (inline)
+      return;
+    context.ui.slot({
+      append: "session.panel",
+      render: (input) => {
+        if (input.name !== PANEL)
+          return;
+        const view = new PanelAppRenderable(context.renderer, palette, directory);
+        onCleanup(() => view.destroyRecursively());
+        if (returnFocus)
+          setTimeout(() => context.keymap.dispatch("pane.focus.left"), 0);
+        returnFocus = false;
+        return view;
+      }
+    });
   }
 };
 export {

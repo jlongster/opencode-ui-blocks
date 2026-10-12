@@ -6,7 +6,7 @@ const result = await Bun.build({
   entrypoints: [new URL("../src/tui/plugin.ts", import.meta.url).pathname],
   target: "bun",
   format: "esm",
-  external: ["@opentui/core", "@opencode/plugin", "@opencode/plugin/tui"],
+  external: ["@opentui/core", "@opencode/plugin", "@opencode/plugin/tui", "solid-js"],
 })
 if (!result.success) throw new AggregateError(result.logs, "build failed")
 await Bun.write(new URL("../tui.js", import.meta.url).pathname, result.outputs[0])
