@@ -193,3 +193,13 @@ test("identical blocks share one widget, and both stay live", async () => {
   await setup.mockMouse.click(button.x + 2, button.y)
   await frameWith(setup, (frame) => frame.split("n=1").length === 3)
 })
+
+test("a blank line separates the widget from the paragraph above it", async () => {
+  const { setup, write } = await mount("prt_gap")
+  await write('Here you go:\n```ui lua title="Gap"\nfunction frame() text("inside") end\n```\n')
+  const frame = await frameWith(setup, (frame) => frame.includes("inside"))
+  const lines = frame.split("\n")
+  const intro = lines.findIndex((line) => line.includes("Here you go:"))
+  expect(lines[intro + 1].trim()).toBe("")
+  expect(lines[intro + 2]).toContain("Gap")
+})

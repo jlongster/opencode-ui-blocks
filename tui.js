@@ -3066,7 +3066,8 @@ class UiBlockRenderable extends BoxRenderable {
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
-      overflow: "hidden"
+      overflow: "hidden",
+      marginTop: 1
     });
     this.controller = controller;
     this.palette = palette;

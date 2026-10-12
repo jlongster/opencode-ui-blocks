@@ -66,6 +66,8 @@ export class UiBlockRenderable extends BoxRenderable {
       paddingLeft: 1,
       paddingRight: 1,
       overflow: "hidden",
+      // Markdown adds no gap above code blocks; it keeps the larger of this and its own margin.
+      marginTop: 1,
     })
     this.detach = controller.attach(() => this.update())
     this.onSizeChange = () => this.caption()
