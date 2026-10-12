@@ -183,6 +183,21 @@ next_frame(tick)`)
     expect((widget.render().view[0] as { p: unknown }).p).toEqual({ gap: 1, padding: 4, border: true })
   })
 
+  test("image names a URL or file and leaves loading to the host", () => {
+    const { widget } = mount(`function frame()
+  image("https://example.com/cat.png", {width = 30, fit = "cover"})
+  image("./shots/a.png", {height = 500})
+end`)
+    expect(widget.render().view).toEqual([
+      { t: "image", p: { src: "https://example.com/cat.png", width: 30, fit: "cover" }, c: [], k: "image" },
+      { t: "image", p: { src: "./shots/a.png", height: 60 }, c: [], k: "image#1" },
+    ])
+    expect(mount(`function frame() image("javascript:alert(1)") end`).widget.render().error).toBe(
+      "line 1: bad argument #1 to 'image' (an http(s) URL or a file path expected)",
+    )
+    expect(mount(`function frame() image("a.png", {fit = "zoom"}) end`).widget.render().error).toContain("bad option 'fit'")
+  })
+
   test("layout containers nest, auto-close with a warning, and mismatches are errors", () => {
     const { widget } = mount(`function frame() begin_row() text("a") begin_col() text("b") end`)
     const view = widget.render().view

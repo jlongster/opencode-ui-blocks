@@ -7,7 +7,11 @@ import { UiBlockRenderable, type UiPalette } from "./renderable"
  * Renders ```ui fences as live widgets. Markdown calls this again on every streamed delta and
  * whenever it rebuilds the block (e.g. scrolled away and back); the controller keeps the state.
  */
-export function createUiBlockRenderer(renderer: RenderContext, palette: () => UiPalette): MarkdownCodeBlockRenderer {
+export function createUiBlockRenderer(
+  renderer: RenderContext,
+  palette: () => UiPalette,
+  directory?: () => string,
+): MarkdownCodeBlockRenderer {
   return (token) => {
     const frame = UiFence.parseFence(token.lang ?? "")
     if (!frame) return undefined
@@ -16,7 +20,7 @@ export function createUiBlockRenderer(renderer: RenderContext, palette: () => Ui
     const closed = isClosed(token.raw)
     const controller = controllerFor(closed ? `block:${Bun.hash(token.lang + "\n" + token.text)}` : `streaming:${token.lang}`)
     controller.update(token.text, closed)
-    return new UiBlockRenderable(renderer, controller, frame, palette())
+    return new UiBlockRenderable(renderer, controller, frame, palette(), directory)
   }
 }
 

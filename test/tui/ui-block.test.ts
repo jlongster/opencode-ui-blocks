@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { createMarkdownCodeBlockRenderer, MarkdownRenderable, RGBA, SyntaxStyle, TextRenderable, type Renderable } from "@opentui/core"
+import { createMarkdownCodeBlockRenderer, ImageRenderable, MarkdownRenderable, RGBA, SyntaxStyle, TextRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing"
 import { createUiBlockRenderer } from "../../src/tui/block"
 
@@ -202,4 +202,44 @@ test("a blank line separates the widget from the paragraph above it", async () =
   const intro = lines.findIndex((line) => line.includes("Here you go:"))
   expect(lines[intro + 1].trim()).toBe("")
   expect(lines[intro + 2]).toContain("Gap")
+})
+
+function findImage(root: Renderable): ImageRenderable | undefined {
+  if (root instanceof ImageRenderable) return root
+  return root.getChildren().map(findImage).find((image) => image !== undefined)
+}
+
+test("image() shows a local file (relative to the session) and an http URL, sized to the image", async () => {
+  const png = await Bun.file(new URL("../fixtures/checker.png", import.meta.url)).bytes()
+  const server = Bun.serve({ port: 0, fetch: (request) => (new URL(request.url).pathname === "/checker.png" ? new Response(png) : new Response("no", { status: 404 })) })
+  try {
+    for (const src of ["test/fixtures/checker.png", `http://127.0.0.1:${server.port}/checker.png`]) {
+      const { setup, write } = await mount(`prt_image_${src.length}`)
+      await write(`\`\`\`ui lua title="Pic"\nfunction frame() image("${src}", {width = 20}) text("below") end\n\`\`\`\n`)
+      await frameWith(setup, () => findImage(setup.renderer.root)?.image != null)
+      const box = findImage(setup.renderer.root)!.parent!
+      // 16x8 pixels at 20 cells wide keeps its 2:1 shape (cells are about twice as tall as wide).
+      expect(box.width).toBe(20)
+      expect(box.height).toBeGreaterThan(2)
+      expect(box.height).toBeLessThan(10)
+      await frameWith(setup, (frame) => frame.includes("below"))
+      setup.renderer.destroy()
+    }
+  } finally {
+    server.stop(true)
+  }
+})
+
+test("image() failures show in place without breaking the widget", async () => {
+  const server = Bun.serve({ port: 0, fetch: () => new Response("no", { status: 404 }) })
+  try {
+    const { setup, write } = await mount("prt_image_errors")
+    await write(
+      `\`\`\`ui lua title="Broken"\nfunction frame()\n  image("http://127.0.0.1:${server.port}/missing.png")\n  image("no/such/file.png")\n  text("still here")\nend\n\`\`\`\n`,
+    )
+    const frame = await frameWith(setup, (frame) => frame.includes("HTTP 404") && frame.includes("file not found"))
+    expect(frame).toContain("still here")
+  } finally {
+    server.stop(true)
+  }
 })

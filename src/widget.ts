@@ -202,6 +202,33 @@ export class Widget {
       return []
     })
 
+    define("image", ([src, options]) => {
+      if (typeof src !== "string" || src.trim() === "")
+        throw new LuaError(`bad argument #1 to 'image' (string expected, got ${src === undefined ? "no value" : type(src)})`)
+      // Loading happens in the host: the program only names the image.
+      if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^(https?|file):/i.test(src))
+        throw new LuaError("bad argument #1 to 'image' (an http(s) URL or a file path expected)")
+      const opts = options instanceof LuaTable ? options : undefined
+      const width = opts?.get("width")
+      const height = opts?.get("height")
+      const fit = opts?.get("fit")
+      if (fit !== undefined && fit !== "fit" && fit !== "cover" && fit !== "fill")
+        throw new LuaError(`bad option 'fit' to 'image' ("fit", "cover" or "fill" expected)`)
+      const build = this.builder("image")
+      build.add({
+        t: "image",
+        p: {
+          src: src.trim(),
+          ...(typeof width === "number" ? { width: clamp(Math.round(width), 4, 200) } : {}),
+          ...(typeof height === "number" ? { height: clamp(Math.round(height), 1, 60) } : {}),
+          ...(typeof fit === "string" ? { fit } : {}),
+        },
+        c: [],
+        k: build.id("image", "", opts?.get("key")),
+      })
+      return []
+    })
+
     define("divider", () => {
       const build = this.builder("divider")
       build.add({ t: "divider", p: {}, c: [], k: build.id("divider", "", undefined) })

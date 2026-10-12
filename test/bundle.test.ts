@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { builtinModules } from "node:module"
 
 // OpenCode only gives the plugin's entry file the host's @opentui/core, so the TUI side ships as
 // one bundled file. Rebuild with `bun run build` after changing src/.
@@ -12,7 +13,8 @@ test("tui.js is up to date and imports nothing but host packages", async () => {
   })
   expect(await result.outputs[0].text()).toBe(committed)
   const imports = new Bun.Transpiler({ loader: "js" }).scan(committed).imports.map((item) => item.path)
-  expect(imports).toEqual(["@opentui/core"])
+  // Node built-ins come from the runtime itself; @opentui/core must be the host's.
+  expect(imports.filter((path) => !builtinModules.includes(path.replace(/^node:/, "")))).toEqual(["@opentui/core"])
 })
 
 test("server.ts has no runtime imports", async () => {

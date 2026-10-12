@@ -12,7 +12,7 @@ export default {
         accent: context.theme.text.action.primary.base,
         error: context.theme.text.feedback.error.base,
         border: context.theme.border.base,
-      })),
+      }), () => context.location?.directory ?? process.cwd()),
     )
   },
 } satisfies Plugin.Definition

@@ -1,7 +1,9 @@
 import {
   BoxRenderable,
+  ImageRenderable,
   TextAttributes,
   TextRenderable,
+  type ImageFit,
   type MouseEvent,
   type RGBA,
   type RenderContext,
@@ -9,6 +11,7 @@ import {
 } from "@opentui/core"
 import { UiFence, type UiWidget } from "../index"
 import type { UiController } from "./controller"
+import { loadImage } from "./image"
 
 export type UiPalette = {
   text: RGBA
@@ -53,6 +56,8 @@ export class UiBlockRenderable extends BoxRenderable {
     private controller: UiController,
     frame: UiFence.Frame,
     private palette: UiPalette,
+    /** Where relative image paths resolve: the session's directory. */
+    private directory: () => string = () => process.cwd(),
   ) {
     super(ctx, {
       border: true,
@@ -179,6 +184,8 @@ export class UiBlockRenderable extends BoxRenderable {
       return
     }
 
+    if (node.t === "image") return this.patchImage(fiber, node, set)
+
     if (!isLeaf(node.t)) {
       const box = fiber.view as BoxRenderable
       const row = node.t === "row"
@@ -210,6 +217,52 @@ export class UiBlockRenderable extends BoxRenderable {
     set("width", leaf.width, () => (text.width = leaf.width ?? "auto"))
     set("height", leaf.height, () => (text.height = leaf.height ?? "auto"))
     set("shrink", leaf.shrink, () => (text.flexShrink = leaf.shrink))
+  }
+
+  /**
+   * Images load outside the program (it only names them). The box shows a status line until the
+   * image arrives; without an explicit height it then takes the image's own proportions.
+   */
+  private patchImage(fiber: Fiber, node: Element, set: (key: string, value: unknown, apply: () => void) => void) {
+    const box = fiber.view as BoxRenderable
+    const src = String(node.p.src)
+    const fit: ImageFit = node.p.fit === "cover" || node.p.fit === "fill" ? node.p.fit : "fit"
+    const width = numberOf(node.p.width, DEFAULT_IMAGE_WIDTH)
+    const height = typeof node.p.height === "number" ? node.p.height : undefined
+    const source = `${src}\n${fit}`
+    set("shrink", 0, () => (box.flexShrink = 0))
+    set("width", width, () => (box.width = width))
+    // Until an image arrives, the box is as tall as its status line (a wrapped error can take several).
+    set("height", height, () => (box.height = height ?? "auto"))
+    set("source", source, () => {
+      const show = (child: Renderable) => {
+        box.getChildren().forEach((old) => old.destroyRecursively())
+        box.add(child)
+      }
+      const status = (content: string, fg: RGBA) => show(new TextRenderable(this.ctx, { content, fg, wrapMode: "word" }))
+      const current = () => !box.isDestroyed && fiber.applied.get("source") === source
+      const failed = (error: unknown) => {
+        if (!current()) return
+        if (height === undefined) box.height = "auto"
+        status(`⚠ image: ${error instanceof Error ? error.message : String(error)}`, this.palette.error)
+      }
+      status("loading image…", this.palette.muted)
+      loadImage(src, this.directory()).then((bytes) => {
+        if (!current()) return
+        const image: ImageRenderable = new ImageRenderable(this.ctx, {
+          source: bytes,
+          fit,
+          width: "100%",
+          height: "100%",
+          onLoad: (loaded) => {
+            if (!current() || fiber.applied.get("height") !== undefined) return
+            box.height = image.getFittedSize(width, UiFence.MAX_HEIGHT, undefined, loaded.width, loaded.height).height
+          },
+          onError: failed,
+        })
+        show(image)
+      }, failed)
+    })
   }
 
   /** How a leaf element looks for its current props. */
@@ -324,6 +377,8 @@ export class UiBlockRenderable extends BoxRenderable {
     super.destroySelf()
   }
 }
+
+const DEFAULT_IMAGE_WIDTH = 40
 
 function identity(node: UiWidget.ViewNode, index: number) {
   return typeof node !== "string" && node.k !== undefined ? `k:${node.k}` : `#${index}`

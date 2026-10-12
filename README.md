@@ -2,7 +2,7 @@
 
 Interactive widgets in the OpenCode TUI. The model writes a small Lua program in a
 ` ```ui lua ` fence; the plugin runs it in its own interpreter and draws it as a live widget with
-buttons, sliders, progress bars and animation, while the reply is still streaming.
+buttons, sliders, progress bars, images and animation, while the reply is still streaming.
 
 ````
 ```ui lua title="Counter"
@@ -39,7 +39,7 @@ Add the plugin to your OpenCode config:
 | `src/widget.ts` | Widget runtime: `frame()`, controls and their ids, events, `item_hovered()`, `next_frame`, rollback of failed runs, limits. Produces a plain view tree. |
 | `src/stream.ts` | Closes a partially streamed program so it can render before the fence ends. |
 | `src/fence.ts` | Reads `size=` and `title=` from the fence line. |
-| `src/tui/` | Plugin entry, OpenTUI renderable (fiber reconciler, mouse handling) and the per-block controller. |
+| `src/tui/` | Plugin entry, OpenTUI renderable (fiber reconciler, mouse handling), the per-block controller and the image loader. |
 | `spec.md` | The language and API reference given to the model. |
 
 ## Development
@@ -60,6 +60,13 @@ bun run build
 bun test
 bun run typecheck
 ```
+
+## Images
+
+`image(src)` accepts `http(s)` URLs and file paths (relative to the session's directory). The
+program only names the image; the TUI side fetches or reads it (16 MB limit, 15 s timeout, small
+cache) and draws it with OpenTUI: kitty graphics or sixel where the terminal supports them,
+coloured half-blocks elsewhere. URLs are fetched as soon as the widget renders.
 
 ## Known limits
 

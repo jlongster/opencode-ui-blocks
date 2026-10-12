@@ -42,6 +42,7 @@ end
 | `slider(value, min, max, step)` | A slider showing `value` (`step` defaults to 1) | the new value: the dragged value on the frame it changed, otherwise `value` |
 | `progress(value, max)` | A progress bar | – |
 | `divider()` | A horizontal line | – |
+| `image(src, opts)` | An image from an `http(s)` URL or a file path (relative paths start at the project directory). `opts` (optional): `{width=N` cells, default 40`, height=N` (default: the image's own proportions)`, fit="fit"/"cover"/"fill", key=…}` | – |
 | `begin_row(opts)` … `end_row()` | Lays out what is drawn between them side by side. `opts` (optional): `{gap=N, padding=N, border=true, key=…}` | – |
 | `begin_col(opts)` … `end_col()` | Lays out what is drawn between them vertically (same options) | – |
 | `item_hovered()` | – | `true` while the mouse is over the element drawn just before it (after `end_row()`, the whole row, including what is inside it) |
@@ -65,6 +66,10 @@ Hover is asked about, not handled: draw the element, then check it.
 if button("Delete") then remove(item) end
 if item_hovered() then text("removes it for good", {dim = true}) end
 ```
+
+Images load in the background: the widget shows "loading image…" in their place, then the image
+(full resolution in terminals with image support, coloured blocks elsewhere). A failed load shows
+the reason in place. Use real image URLs you know exist (PNG, JPEG, WebP or GIF).
 
 ## Time and animation
 

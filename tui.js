@@ -2820,6 +2820,31 @@ class Widget {
       });
       return [];
     });
+    define("image", ([src, options]) => {
+      if (typeof src !== "string" || src.trim() === "")
+        throw new LuaError(`bad argument #1 to 'image' (string expected, got ${src === undefined ? "no value" : type(src)})`);
+      if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^(https?|file):/i.test(src))
+        throw new LuaError("bad argument #1 to 'image' (an http(s) URL or a file path expected)");
+      const opts = options instanceof LuaTable ? options : undefined;
+      const width = opts?.get("width");
+      const height = opts?.get("height");
+      const fit = opts?.get("fit");
+      if (fit !== undefined && fit !== "fit" && fit !== "cover" && fit !== "fill")
+        throw new LuaError(`bad option 'fit' to 'image' ("fit", "cover" or "fill" expected)`);
+      const build = this.builder("image");
+      build.add({
+        t: "image",
+        p: {
+          src: src.trim(),
+          ...typeof width === "number" ? { width: clamp2(Math.round(width), 4, 200) } : {},
+          ...typeof height === "number" ? { height: clamp2(Math.round(height), 1, 60) } : {},
+          ...typeof fit === "string" ? { fit } : {}
+        },
+        c: [],
+        k: build.id("image", "", opts?.get("key"))
+      });
+      return [];
+    });
     define("divider", () => {
       const build = this.builder("divider");
       build.add({ t: "divider", p: {}, c: [], k: build.id("divider", "", undefined) });
@@ -3047,17 +3072,78 @@ function controllerFor(key) {
 // src/tui/renderable.ts
 import {
   BoxRenderable,
+  ImageRenderable,
   TextAttributes,
   TextRenderable
 } from "@opentui/core";
+
+// src/tui/image.ts
+import { homedir } from "os";
+import path from "path";
+import { fileURLToPath } from "url";
+var MAX_BYTES = 16 * 1024 * 1024;
+var TIMEOUT_MS = 15000;
+var MAX_CACHED = 32;
+var cache = new Map;
+function loadImage(src, directory) {
+  const key = /^https?:/i.test(src) ? src : resolvePath(src, directory);
+  const cached = cache.get(key);
+  if (cached) {
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
+  const loading = (/^https?:/i.test(src) ? download(key) : readFile(key)).catch((error) => {
+    cache.delete(key);
+    throw error;
+  });
+  cache.set(key, loading);
+  if (cache.size > MAX_CACHED)
+    cache.delete(cache.keys().next().value);
+  return loading;
+}
+function resolvePath(src, directory) {
+  if (/^file:/i.test(src))
+    return fileURLToPath(src);
+  if (src === "~" || src.startsWith("~/"))
+    return path.join(homedir(), src.slice(1));
+  return path.resolve(directory, src);
+}
+async function readFile(file) {
+  const handle = Bun.file(file);
+  if (!await handle.exists())
+    throw new Error(`file not found: ${file}`);
+  if (handle.size > MAX_BYTES)
+    throw new Error(`file is larger than ${MAX_BYTES / 1024 / 1024} MB`);
+  return handle.bytes();
+}
+async function download(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (!response.ok)
+    throw new Error(`HTTP ${response.status}`);
+  if (Number(response.headers.get("content-length")) > MAX_BYTES)
+    throw new Error(`image is larger than ${MAX_BYTES / 1024 / 1024} MB`);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body ?? []) {
+    size += chunk.byteLength;
+    if (size > MAX_BYTES)
+      throw new Error(`image is larger than ${MAX_BYTES / 1024 / 1024} MB`);
+    chunks.push(chunk);
+  }
+  return Bun.concatArrayBuffers(chunks, Infinity, true);
+}
+
+// src/tui/renderable.ts
 class UiBlockRenderable extends BoxRenderable {
   controller;
   palette;
+  directory;
   detach;
   fibers = [];
   ids = new WeakMap;
   hoverSeq = 0;
-  constructor(ctx, controller, frame, palette) {
+  constructor(ctx, controller, frame, palette, directory = () => process.cwd()) {
     super(ctx, {
       border: true,
       borderStyle: "rounded",
@@ -3074,6 +3160,7 @@ class UiBlockRenderable extends BoxRenderable {
     });
     this.controller = controller;
     this.palette = palette;
+    this.directory = directory;
     this.detach = controller.attach(() => this.update());
     this.onSizeChange = () => this.caption();
     this.onMouseOver = (event) => {
@@ -3173,6 +3260,8 @@ class UiBlockRenderable extends BoxRenderable {
       set("wrap", "word", () => text.wrapMode = "word");
       return;
     }
+    if (node.t === "image")
+      return this.patchImage(fiber, node, set);
     if (!isLeaf(node.t)) {
       const box = fiber.view;
       const row = node.t === "row";
@@ -3203,6 +3292,51 @@ class UiBlockRenderable extends BoxRenderable {
     set("width", leaf.width, () => text.width = leaf.width ?? "auto");
     set("height", leaf.height, () => text.height = leaf.height ?? "auto");
     set("shrink", leaf.shrink, () => text.flexShrink = leaf.shrink);
+  }
+  patchImage(fiber, node, set) {
+    const box = fiber.view;
+    const src = String(node.p.src);
+    const fit = node.p.fit === "cover" || node.p.fit === "fill" ? node.p.fit : "fit";
+    const width = numberOf(node.p.width, DEFAULT_IMAGE_WIDTH);
+    const height = typeof node.p.height === "number" ? node.p.height : undefined;
+    const source = `${src}
+${fit}`;
+    set("shrink", 0, () => box.flexShrink = 0);
+    set("width", width, () => box.width = width);
+    set("height", height, () => box.height = height ?? "auto");
+    set("source", source, () => {
+      const show = (child) => {
+        box.getChildren().forEach((old) => old.destroyRecursively());
+        box.add(child);
+      };
+      const status = (content, fg) => show(new TextRenderable(this.ctx, { content, fg, wrapMode: "word" }));
+      const current = () => !box.isDestroyed && fiber.applied.get("source") === source;
+      const failed = (error) => {
+        if (!current())
+          return;
+        if (height === undefined)
+          box.height = "auto";
+        status(`\u26A0 image: ${error instanceof Error ? error.message : String(error)}`, this.palette.error);
+      };
+      status("loading image\u2026", this.palette.muted);
+      loadImage(src, this.directory()).then((bytes) => {
+        if (!current())
+          return;
+        const image = new ImageRenderable(this.ctx, {
+          source: bytes,
+          fit,
+          width: "100%",
+          height: "100%",
+          onLoad: (loaded) => {
+            if (!current() || fiber.applied.get("height") !== undefined)
+              return;
+            box.height = image.getFittedSize(width, MAX_HEIGHT, undefined, loaded.width, loaded.height).height;
+          },
+          onError: failed
+        });
+        show(image);
+      }, failed);
+    });
   }
   leaf(fiber, node) {
     const palette = this.palette;
@@ -3311,6 +3445,7 @@ class UiBlockRenderable extends BoxRenderable {
     super.destroySelf();
   }
 }
+var DEFAULT_IMAGE_WIDTH = 40;
 function identity(node, index) {
   return typeof node !== "string" && node.k !== undefined ? `k:${node.k}` : `#${index}`;
 }
@@ -3360,7 +3495,7 @@ function colorOf(value, palette) {
 }
 
 // src/tui/block.ts
-function createUiBlockRenderer(renderer, palette) {
+function createUiBlockRenderer(renderer, palette, directory) {
   return (token) => {
     const frame = parseFence(token.lang ?? "");
     if (!frame)
@@ -3372,7 +3507,7 @@ function createUiBlockRenderer(renderer, palette) {
     const controller = controllerFor(closed ? `block:${Bun.hash(token.lang + `
 ` + token.text)}` : `streaming:${token.lang}`);
     controller.update(token.text, closed);
-    return new UiBlockRenderable(renderer, controller, frame, palette());
+    return new UiBlockRenderable(renderer, controller, frame, palette(), directory);
   };
 }
 function isClosed(raw) {
@@ -3397,7 +3532,7 @@ var plugin_default = {
       accent: context.theme.text.action.primary.base,
       error: context.theme.text.feedback.error.base,
       border: context.theme.border.base
-    })));
+    }), () => context.location?.directory ?? process.cwd()));
   }
 };
 export {
