@@ -26,7 +26,8 @@ Add the plugin to your OpenCode config:
 { "plugins": ["/path/to/opencode-ui-blocks"] }
 ```
 
-- **TUI side** (`tui.ts`): registers a markdown code block renderer for `ui` fences.
+- **TUI side** (`tui.js`, built from `src/tui/plugin.ts`): registers a markdown code block renderer
+  for `ui` fences.
 - **Server side** (`server.ts`): registers a `ui-blocks` skill containing [`spec.md`](./spec.md),
   so the model can look up how to write widgets when one would help.
 
@@ -38,16 +39,24 @@ Add the plugin to your OpenCode config:
 | `src/widget.ts` | Widget runtime: `frame()`, controls and their ids, events, `item_hovered()`, `next_frame`, rollback of failed runs, limits. Produces a plain view tree. |
 | `src/stream.ts` | Closes a partially streamed program so it can render before the fence ends. |
 | `src/fence.ts` | Reads `size=` and `title=` from the fence line. |
-| `src/tui/` | OpenTUI renderable (fiber reconciler, mouse handling) and the per-block controller. |
+| `src/tui/` | Plugin entry, OpenTUI renderable (fiber reconciler, mouse handling) and the per-block controller. |
 | `spec.md` | The language and API reference given to the model. |
 
 ## Development
 
-The plugin uses the host's `@opentui/core` and `@opencode/plugin` at runtime. For types and tests,
-link them from an OpenCode checkout:
+The plugin must use the host's `@opentui/core`: renderables from another copy cannot join the
+host's tree (OpenTUI throws "remove expects a renderable child object"). Two rules keep it that way:
+
+- **The TUI side ships as one bundled file**, `tui.js`, with `@opentui/core` external. OpenCode
+  redirects `@opentui/core` to its own copy only for imports in the entry file, not for files it
+  imports. Run `bun run build` after changing `src/`; a test fails if `tui.js` is stale.
+- **No host packages in `node_modules`.** `server.ts` has no runtime imports, and the packages used
+  for types and tests are linked into `.dev/node_modules` (mapped in `tsconfig.json`), where the
+  runtime never looks.
 
 ```bash
-OPENCODE_REPO=/path/to/opencode bun run dev:link
+OPENCODE_REPO=/path/to/opencode bun run dev:link   # links .dev/node_modules
+bun run build
 bun test
 bun run typecheck
 ```

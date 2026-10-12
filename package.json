@@ -7,13 +7,14 @@
   "license": "MIT",
   "exports": {
     "./server": "./server.ts",
-    "./tui": "./tui.ts",
+    "./tui": "./tui.js",
     "./runtime": "./src/index.ts"
   },
   "scripts": {
+    "build": "bun script/build.ts",
     "dev:link": "bun script/dev-link.ts",
     "test": "bun test",
-    "typecheck": "bun node_modules/@typescript/native-preview/bin/tsgo.js --noEmit"
+    "typecheck": "bun .dev/node_modules/@typescript/native-preview/bin/tsgo.js --noEmit"
   },
   "peerDependencies": {
     "@opencode/plugin": "*",

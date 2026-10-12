@@ -1,6 +1,7 @@
 /**
- * Links the host packages from an OpenCode checkout into node_modules, so types, tests and the
- * plugin all use the same @opentui/core and @opencode/plugin as the TUI that loads it.
+ * Links the host packages from an OpenCode checkout into .dev/node_modules (mapped in tsconfig), so
+ * types and tests use the same @opentui/core and @opencode/plugin as the TUI that loads it. They are
+ * kept out of node_modules: a plugin-local copy of @opentui/core would shadow the host's at runtime.
  *
  *   OPENCODE_REPO=/path/to/opencode bun script/dev-link.ts
  */
@@ -18,7 +19,7 @@ const links = {
 }
 
 for (const [name, target] of Object.entries(links)) {
-  const at = path.join(import.meta.dir, "..", "node_modules", name)
+  const at = path.join(import.meta.dir, "..", ".dev", "node_modules", name)
   await mkdir(path.dirname(at), { recursive: true })
   if (await lstat(at).catch(() => undefined)) await rm(at, { recursive: true, force: true })
   await symlink(realpathSync(target), at)

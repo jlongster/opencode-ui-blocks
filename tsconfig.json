@@ -1,7 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-    "lib": ["ESNext"],
+    "lib": [
+      "ESNext"
+    ],
     "target": "ESNext",
     "module": "Preserve",
     "moduleResolution": "bundler",
@@ -12,7 +14,31 @@
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["bun"]
+    "types": [
+      "bun"
+    ],
+    "paths": {
+      "@opentui/core": [
+        "./.dev/node_modules/@opentui/core"
+      ],
+      "@opentui/core/*": [
+        "./.dev/node_modules/@opentui/core/*"
+      ],
+      "@opencode/plugin": [
+        "./.dev/node_modules/@opencode/plugin/src/promise/index.ts"
+      ],
+      "@opencode/plugin/tui": [
+        "./.dev/node_modules/@opencode/plugin/src/tui/index.ts"
+      ]
+    },
+    "typeRoots": [
+      "./.dev/node_modules/@types"
+    ]
   },
-  "include": ["*.ts", "src", "test", "script"]
+  "include": [
+    "*.ts",
+    "src",
+    "test",
+    "script"
+  ]
 }

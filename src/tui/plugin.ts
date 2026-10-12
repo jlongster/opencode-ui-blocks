@@ -1,9 +1,9 @@
-import { Plugin } from "@opencode/plugin/tui"
-import { createUiBlockRenderer } from "./src/tui/block"
+import type { Plugin } from "@opencode/plugin/tui"
+import { createUiBlockRenderer } from "./block"
 
-export default Plugin.define({
+export default {
   id: "opencode-ui-blocks",
-  setup(context) {
+  setup(context: Plugin.Context) {
     context.markdown.registerCodeBlockRenderer(
       "ui",
       createUiBlockRenderer(context.renderer, () => ({
@@ -15,4 +15,4 @@ export default Plugin.define({
       })),
     )
   },
-})
+} satisfies Plugin.Definition
